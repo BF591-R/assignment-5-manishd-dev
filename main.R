@@ -21,38 +21,28 @@ library('fgsea')
 #'
 #' @examples se <- make_se('verse_counts.tsv', 'sample_metadata.csv', c('vP0', 'vAd'))
 make_se <- function(counts_csv, metafile_csv, selected_times) {
-  # read counts matrix
-  counts_df <- read_tsv(counts_csv)
+  counts_df <- readr::read_tsv(counts_csv)
+  meta_df <- readr::read_csv(metafile_csv)
   
-  # read metadata
-  meta_df <- read_csv(metafile_csv)
-  
-  # keep only selected timepoints
   meta_subset <- meta_df %>%
     dplyr::filter(timepoint %in% selected_times) %>%
-    dplyr::select(samplename, timepoint)
-  
-  # set factor levels so first selected time is reference
-  meta_subset <- meta_subset %>%
+    dplyr::select(samplename, timepoint) %>%
     dplyr::mutate(timepoint = factor(timepoint, levels = selected_times))
   
-  # get sample names in metadata order
   sample_order <- meta_subset$samplename
   
-  # subset counts matrix
   counts_subset <- counts_df %>%
     dplyr::select(gene, dplyr::all_of(sample_order))
   
-  # convert to matrix
   count_matrix <- as.matrix(counts_subset[, -1])
   rownames(count_matrix) <- counts_subset$gene
   
-  # reorder metadata to match counts matrix columns exactly
   meta_subset <- meta_subset %>%
     dplyr::slice(match(colnames(count_matrix), samplename))
   
-  # create SummarizedExperiment object
-  se <- SummarizedExperiment(
+  rownames(meta_subset) <- meta_subset$samplename
+  
+  se <- SummarizedExperiment::SummarizedExperiment(
     assays = list(counts = count_matrix),
     colData = meta_subset
   )
@@ -74,23 +64,12 @@ make_se <- function(counts_csv, metafile_csv, selected_times) {
 #'
 #' @examples results <- return_deseq_res(se, ~ timepoint)
 return_deseq_res <- function(se, design) {
-  # convert SummarizedExperiment to DESeqDataSet
-  dds <- DESeqDataSet(se, design = design)
-  
-  # run DESeq2
-  dds <- DESeq(dds)
-  
-  # get results
-  res <- results(dds)
-  
-  # convert results to dataframe
+  dds <- DESeq2::DESeqDataSet(se, design = design)
+  dds <- DESeq2::DESeq(dds)
+  res <- DESeq2::results(dds)
   res_df <- as.data.frame(res)
   
-  # return named list
-  return(list(
-    dds = dds,
-    results = res_df
-  ))
+  return(list(dds = dds, results = res_df))
 }
 
 #' Function that takes the DESeq2 results dataframe, converts it to a tibble and
@@ -286,25 +265,17 @@ plot_volcano <- function(labeled_results) {
 
 make_ranked_log2fc <- function(labeled_results, id2gene_path) {
   id2gene <- read.delim(id2gene_path, stringsAsFactors = FALSE)
+  
+  # make sure first two columns are genes and symbols
   colnames(id2gene)[1:2] <- c("genes", "symbol")
   
-  merged_df <- labeled_results %>%
+  ranked_df <- labeled_results %>%
     dplyr::left_join(id2gene, by = "genes") %>%
-    dplyr::filter(!is.na(log2FoldChange), !is.na(symbol))
-  
-  #  remove duplicates (keep highest absolute log2FC per gene)
-  merged_df <- merged_df %>%
-    dplyr::group_by(symbol) %>%
-    dplyr::slice_max(order_by = abs(log2FoldChange), n = 1) %>%
-    dplyr::ungroup()
-  
-  # sort descending
-  merged_df <- merged_df %>%
+    dplyr::filter(!is.na(log2FoldChange), !is.na(symbol), symbol != "") %>%
     dplyr::arrange(dplyr::desc(log2FoldChange))
   
-  # create named vector
-  ranked_vec <- merged_df$log2FoldChange
-  names(ranked_vec) <- merged_df$symbol
+  ranked_vec <- ranked_df$log2FoldChange
+  names(ranked_vec) <- ranked_df$symbol
   
   return(ranked_vec)
 }
@@ -322,10 +293,8 @@ make_ranked_log2fc <- function(labeled_results, id2gene_path) {
 #'
 #' @examples fgsea_results <- run_fgsea('data/m2.cp.v2023.1.Mm.symbols.gmt', rnk_list, 15, 500)
 run_fgsea <- function(gmt_file_path, rnk_list, min_size, max_size) {
-  # read pathways from GMT file
   pathways <- fgsea::gmtPathways(gmt_file_path)
   
-  # run fgsea
   fgsea_res <- fgsea::fgsea(
     pathways = pathways,
     stats = rnk_list,
@@ -333,10 +302,8 @@ run_fgsea <- function(gmt_file_path, rnk_list, min_size, max_size) {
     maxSize = max_size
   )
   
-  # convert to tibble
-  fgsea_res <- tibble::as_tibble(fgsea_res)
+  return(tibble::as_tibble(fgsea_res))
   
-  return(fgsea_res)
 }
 
 #' Function to plot top ten positive NES and top ten negative NES pathways
